@@ -28,55 +28,54 @@ ssc install did_imputation
 ssc install reghdfe
 */
 
+
 /***********************************
 (a) Load the dataset and summarize the data. Is the panel balanced (i.e., complete
-observations for each state-year combination)? Visualize the timing of primary belt laws.
-Are there any reversals of these laws? Are there "never-treated" states? How do the timing
-of primary and secondary belt laws relate to each other? 
+observations for each state-year combination)? Visualize the timing of primary belt laws. Are there any reversals of these laws? Are there "never-treated" states? How do the timing of primary and secondary belt laws relate to each other? 
 ***********************************/
+sort state year
 
-* Check if balanced
 xtset state year
 spbalance // data are strongly balanced
 
-
-* Check missings
 summarize
 misstable summarize // no missings
 
-
 * Count switchers
-sort state year
-by state: gen switch_p = primary[_n] - primary[_n-1]
-replace switch_p = 0 if missing(switch_p)
-count if switch_p == -1 // no states switched primary laws
+local vars "primary secondary"
 
-
-by state: gen switch_s = secondary[_n] - secondary[_n-1]
-count if switch_s == -1 // 11 states switched secondary
-
+foreach var in `vars' {
+    by state: gen switch_`var' = `var'[_n] - `var'[_n-1]
+    replace switch_`var' = 0 if missing(switch_`var')
+    count if switch_`var' == -1 // 0 states switched primary, 11 secondary
+}
+ren switch_primary switch_p
+ren switch_secondary switch_s
 
 * Year first treated
-gen first_treat_temp = 0
-replace first_treat_temp = year if switch_p == 1 
-by state: egen first_treat = max(first_treat_temp)
-drop first_treat_temp
+local prefixes "p s"
+
+foreach pre in `prefixes' {
+	gen year_`pre' = year if switch_`pre' == 1
+    by state: egen first_treat_`pre' = max(year_`pre')
+    drop year_`pre'
+	sum first_treat_`pre'
+	di "The average year primary/secondary law enacted was " `r(mean)'
+	// 1993 for primary
+	// 1989 for secondary
+}
+
+* Never treated wrt primary 
+gen never_treated = missing(first_treat_p)
+tab state if never_treated == 1 // 30 states never treated
 
 
-* Count never-treated
-by state: egen years_treated = total(primary)
-tab state if years_treated == 0 // about half sample never treated
+* Years between primary and secondary laws
+by state: gen diff_timing = first_treat_p - first_treat_s
 
 
-* See how many years between primary and secondary laws
-gen year_s = year if switch_s == 1
-gen year_p = year if switch_p == 1
 
-by state: egen year_s_enact = max(year_s)
-by state: egen year_p_enact = max(year_p)
-
-by state: gen diff_timing = year_p_enact - year_s_enact
-drop year_p year_s
+****** Figures
 
 hist diff_timing, title("Timing difference between primary and secondary laws") xtick(0(1)18) xtitle("Difference in years (primary - secondary)") 
 
@@ -88,7 +87,7 @@ xtline primary, i(state) t(year) overlay xtitle("Year") title("States enacting p
 
 graph export "$figures/timing_primary.png", replace 	
 
-hist year_p_enact, title("Year states first enact primary laws") xtick(1985(5)2005) xtitle("Year enacted") 
+hist first_treat_p, title("Year states first enact primary laws") xtick(1985(5)2005) xtitle("Year enacted") 
 
 graph export "$figures/timing_primary2.png", replace 	
 
@@ -111,31 +110,45 @@ graph export "$figures/timing_secondary.png", replace
 gen y = ln(fatalities / population)
 la var y "Log traffic fatalities per capita"
 
-* Create a variable to identify never treated states
-gen never_treated = missing(year_p_enact)
+gen K = year - 2000 // pick random year to compare against
+replace K = year - first_treat_p if !missing(first_treat_p)
 
-gen K = year - first_treat
-replace K = K-2000 if never_treated == 1
-
-* Collapse the data to get mean of y for each K value by treatment status
+set graphics on
+preserve
 collapse (mean) mean_y = y, by(K never_treated)
-
-* Now plot both treated and never treated lines from the collapsed data
 
 twoway line mean_y K if never_treated == 0 ///
 	|| line mean_y K if never_treated == 1, ///
 	legend(label(1 "Treated States") label(2 "Never Treated States")) ///
 	title("Parallel Trends Plot") ///
 	xlabel(-22(3)20) ylabel(, format(%9.0g)) ///
-	xtitle("Years Relative to Treatment") ytitle("Mean of y") ///
+	xtitle("Years Relative to Treatment") ytitle("Mean of log fatalities") ///
 	xline(0)
 
 graph export "$figures/parallel.png", replace 	
+restore
 
 
 
+/***********************************
+(c) Test the parallel trends assumption in any manner you find feasible and useful. Summarize the test and your findings. Do secondary belt laws pose a problem for a simple DiD analysis? If so, test whether that problem is likely to be significant. If not, explain why not.
+***********************************/
 
-	
+* First 6 pretrends not significant 
+did_imputation y state year first_treat_p, pretrend(6) autosample
+
+coefplot, drop(_cons tau) ////
+	xline(0) xtitle("Coefficient on pretrend") ///
+	title("Pretrends test using Borusyak et al. (2024)")
+
+graph export "$figures/pretrend_test.png", replace 	
+
+
+event_plot, default_look ///
+	graph_opt(xtitle("Periods prior to primary law enactment") ///
+	ytitle("Average causal effect") ///
+	title("Borusyak et al. (2024) event study plot") xlabel(-5(1)5))
+
 
 
 
@@ -147,16 +160,7 @@ results mostly agree?
 ***********************************/
 
 
-
-	
-	
-did_imputation y state year first_treat, pretrend(6) autosample
-event_plot, default_look graph_opt(xtitle("Periods prior to primary law enactment") ytitle("Average causal effect") ///
-	title("Borusyak et al. (2021) event study plot") xlabel(-5(1)5))
-
-
-
-csdid y primary, ivar(state) time(year) gvar(first_treat)
+csdid y primary, ivar(state) time(year) gvar(first_treat_p)
 csdid_stats pretrend
 
 local years 1987 1996 1998 2000
