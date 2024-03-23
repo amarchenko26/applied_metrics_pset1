@@ -10,7 +10,8 @@
 * Define paths  
 ***********************************	
 
-global figures "/Users/anyamarchenko/CEGA Dropbox/Anya Marchenko/Apps/Overleaf/Applied Metrics - Pset 1/figures"
+global figures "/Users/anyamarchenko/CEGA Dropbox/Anya Marchenko/Apps/Overleaf/Pset 1 (Spring 2024, Applied Metrics, Peter Hull)/figures"
+
 
 // deletes & remakes figures folder
 shell if [ -d "$figures" ]; then rm -r "$figures"; fi; mkdir -p "$figures"
@@ -79,7 +80,7 @@ tab state if never_treated == 1 // 30 states never treated
 by state: gen diff_timing = first_treat_p - first_treat_s
 
 
-/*
+
 // Figures
 
 * Visualize when states first enact laws
@@ -92,6 +93,7 @@ graph dot first_treat_s first_treat_p, over(state, label(labsize(*.50))) ///
 	note("Vertical lines indicate mean enactment year, 1989 for secondary, 1993 for primary") ///
 	noextend
 graph export "$figures/dots.png", replace 	
+
 
 * Histograms
 xtline primary, ///
@@ -114,7 +116,6 @@ hist diff_timing, ///
 	xtick(0(1)18) xtitle("Difference in years (primary - secondary)") 
 graph export "$figures/timing_diff.png", replace 	
 
-*/
 
 drop diff_timing
 
@@ -130,30 +131,21 @@ drop diff_timing
 ***********************************/
 
 gen y = ln(fatalities / population)
-la var y "Log traffic fatalities per capita"
-
-gen K = year - 2000 // pick random year to compare against
-replace K = year - first_treat_p if !missing(first_treat_p)
+la var y "Ln traffic fatalities per capita"
 
 preserve
-collapse (mean) mean_y = y, by(K never_treated)
+collapse (mean) mean_y = y, by(year never_treated)
 
-twoway line mean_y K if never_treated == 0 ///
-	|| line mean_y K if never_treated == 1, ///
+twoway line mean_y year if never_treated == 0 ///
+	|| line mean_y year if never_treated == 1, ///
 	legend(label(1 "Treated States") label(2 "Never Treated States")) ///
-	title("Parallel Trends Plausibility Plot") ///
-	xlabel(-22(3)20) ylabel(, format(%9.0g)) ///
-	xtitle("Years Relative to Treatment") ytitle("log(fatalities per capita)") ///
-	xline(0)
-
+	title("Parallel Trends Plausibility") ///
+	ylabel(, format(%9.0g)) ///
+	xtitle("Year") ytitle("ln(fatalities per capita)") ///
+	xline(1993) note("Vertical line indicates mean year primary laws passed")
+	
 graph export "$figures/parallel.png", replace 	
 restore
-
-drop K 
-
-
-
-
 
 
 
@@ -187,18 +179,12 @@ graph export "$figures/pretrend_test_fe.png", replace
 
 
 
-
-
-
-
-
-
 /***********************************
 (d) [6 points] Using regression, estimate the dynamic effect of primary belt laws on the outcome for each of the horizons where a reasonable sample is available. Then compare your
 estimates to ones from the Borusyak, Jaravel, and Spiess (2024) imputation estimator. Do the results mostly agree?
 ***********************************/
 
-******** 1) Event study regression
+******** 1) Event study regression *********************************************
 
 * gen lag var
 g time_to_treat = year - first_treat_p
@@ -243,16 +229,17 @@ reghdfe y i.primary#i.lag_neg4 ///
 		  i.primary#i.lag_1 ///
 		  i.primary#i.lag_2 ///
 		  i.primary#i.lag_3 ///
-		  i.primary#i.lag_4, absorb(state year) vce(cluster state) keepsing
+		  i.primary#i.lag_4, absorb(state year) vce(cluster state)
 
 estimates store model
 estfe . model, labels(state "State FE" year "Year FE")
 return list
-// esttab model using "eventstudy.tex", style(tex) replace //uncomment to replace
+// esttab model using "eventstudy.tex", style(tex) replace //uncomment to replace table
 
 
 		  
-******** 1b) Event-study using Callaway 
+******** 1b) Event-study using Callaway and Sant'Anna (2021) *******************
+
 gen gvar = first_treat_p
 replace gvar = 0 if never_treated == 1 // csdid expects gvar to = 0 for never treated
 
@@ -264,12 +251,12 @@ foreach year in `years' {
 	graph export "$figures/event_study_`year'.png", replace 	
 }
 
-// Callaway and Sant'Anna (2021) ATT
 csdid y primary, ivar(state) time(year) gvar(gvar) agg(simple) // ATT = -.068
 
 
 
-******** 2) Dynamic effect using Borusyak, results agree 
+******** 2) Dynamic effect using Borusyak **************************************
+
 did_imputation y state year first_treat_p, ///
 	horizons(0/7) ///
 	pretrends(5) minn(0) ///
@@ -277,14 +264,10 @@ did_imputation y state year first_treat_p, ///
 	
 	
 	
-	
-	
-	
-	
-	
 
 /***********************************
-(e) [4 points] Check the sensitivity of both estimates in (d) to including state-specific linear trends in your model of untreated potential outcomes.
+(e) [4 points] Check the sensitivity of both estimates in (d) to including 
+state-specific linear trends in your model of untreated potential outcomes.
 ***********************************/
 
 ******** 1) Event study + state linear trends 
@@ -319,25 +302,55 @@ did_imputation y state year first_treat_p, ///
 	avgeffectsby(primary) ///
 	unitcontrols(year)
 
+drop lag*
 
 
-	
-	
-	
+
 /***********************************
 (f) [6 points] Estimate the ``static'' TWFE regression which specifies treatment as only affecting outcomes in the current period. Estimate and plot the total weight this regression places on treated observations at each horizon. In what way are these weights informative? Compare these to the sample weights of each horizon. In your view, does the static regression coefficient provide a useful summary of causal effects in this setting?
 ***********************************/
 
+// Static TWFE
+reghdfe y primary, ///
+	vce(cluster state) absorb(state year) 
+	
+// Estimate residuals
+predict resid, residuals
+	
+// Calculate weights
+g num = primary * resid  // weight numerator
+egen den = total(num)	 // weights denominator
+g weights = num / den
 
+drop num den
 
-br state year primary switch_p first_treat
+* Plot regression weights
+preserve 
+collapse (mean) mean_weight = weights, by(time_to_treat)
 
+scatter mean_weight time_to_treat, ///
+	xtitle("Time to treatment") ///
+	ytitle("Mean weights") ///
+	title("Regression weights on treated observations by horizon")
 
+graph export "$figures/weights.png", replace 	
+restore
 
+* Calculate sampling weights
+egen den = total(primary) //182 is denominator 
 
+preserve
+drop if missing(time_to_treat) //otherwise collapse will include missing as value
+g x = 1
+collapse (count) num = x, by(time_to_treat)
+g samp_weights = num / 182
 
+scatter samp_weights time_to_treat, ///
+	xtitle("Time to treatment") ///
+	ytitle("Mean weights") ///
+	title("Sampling weights by horizon")
 
-
-
+graph export "$figures/sample_weights.png", replace 	
+restore
 
 
